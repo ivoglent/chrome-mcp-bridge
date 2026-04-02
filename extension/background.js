@@ -111,6 +111,16 @@ async function handleAction(action, payload) {
       return await handleGetText(payload);
     case 'get_element':
       return await handleGetElement(payload);
+    case 'click_element':
+      return await handleClickElement(payload);
+    case 'type_text':
+      return await handleTypeText(payload);
+    case 'scroll_page':
+      return await handleScrollPage(payload);
+    case 'hover_element':
+      return await handleHoverElement(payload);
+    case 'mouse_click_at':
+      return await handleMouseClickAt(payload);
     default:
       throw new Error(`Unknown action: ${action}`);
   }
@@ -148,6 +158,8 @@ function delay(ms) {
 
 async function handleCaptureScreenshot(payload) {
   const tabId = await resolveTabId(payload);
+  const format = payload.format || 'jpeg';
+  const quality = payload.quality ?? 50;
 
   // Ensure the tab is active and focused before capturing
   const tab = await chrome.tabs.get(tabId);
@@ -155,11 +167,14 @@ async function handleCaptureScreenshot(payload) {
   await chrome.windows.update(tab.windowId, { focused: true });
   await delay(500);
 
-  console.log(`[MCP Extension] Capturing screenshot of tab ${tabId}, window ${tab.windowId}`);
+  console.log(`[MCP Extension] Capturing screenshot of tab ${tabId}, window ${tab.windowId} (${format}, quality: ${quality})`);
 
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-    format: 'png',
-  });
+  const captureOptions = { format };
+  if (format === 'jpeg') {
+    captureOptions.quality = quality;
+  }
+
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, captureOptions);
 
   if (!dataUrl) {
     throw new Error('captureVisibleTab returned empty result');
@@ -167,11 +182,11 @@ async function handleCaptureScreenshot(payload) {
 
   console.log(`[MCP Extension] Screenshot captured, dataUrl length: ${dataUrl.length}`);
 
-  // Return base64 data (strip the data:image/png;base64, prefix)
-  const base64Data = dataUrl.replace(/^data:image\/png;base64,/, '');
+  // Strip the data URL prefix (e.g. "data:image/jpeg;base64," or "data:image/png;base64,")
+  const base64Data = dataUrl.replace(/^data:image\/[a-z]+;base64,/, '');
   return {
     tabId,
-    format: 'png',
+    format,
     base64: base64Data,
   };
 }
@@ -180,13 +195,27 @@ async function handleCaptureScreenshot(payload) {
 
 async function handleGetHtml(payload) {
   const tabId = await resolveTabId(payload);
+  const selector = payload.selector;
   const results = await chrome.scripting.executeScript({
     target: { tabId },
-    func: () => document.documentElement.outerHTML,
+    func: (sel) => {
+      if (sel) {
+        const element = document.querySelector(sel);
+        if (!element) return { html: '', found: false };
+        return { html: element.outerHTML, found: true };
+      }
+      return { html: document.documentElement.outerHTML, found: true };
+    },
+    args: [selector || null],
   });
+  const scriptResult = results[0]?.result || { html: '', found: false };
+  if (selector && !scriptResult.found) {
+    throw new Error(`No element found matching selector: "${selector}"`);
+  }
   return {
     tabId,
-    html: results[0]?.result || '',
+    selector: selector || null,
+    html: scriptResult.html,
   };
 }
 
@@ -310,6 +339,304 @@ async function handleGetElement(payload) {
     selector: payload.selector,
     element: results[0]?.result || null,
   };
+}
+
+// ─── Click Element ──────────────────────────────────────────────────
+
+async function handleClickElement(payload) {
+  if (!payload.selector) {
+    throw new Error('Missing required field: selector');
+  }
+  const tabId = await resolveTabId(payload);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) {
+        return { __error: true, message: `No element found for selector: ${selector}` };
+      }
+      // Scroll element into view
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Dispatch mouse events for full compatibility
+      const rect = element.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const eventOptions = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: centerX,
+        clientY: centerY,
+      };
+      element.dispatchEvent(new MouseEvent('mouseover', eventOptions));
+      element.dispatchEvent(new MouseEvent('mousedown', eventOptions));
+      element.dispatchEvent(new MouseEvent('mouseup', eventOptions));
+      element.dispatchEvent(new MouseEvent('click', eventOptions));
+      return {
+        tagName: element.tagName,
+        textContent: (element.textContent || '').substring(0, 200),
+        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      };
+    },
+    args: [payload.selector],
+  });
+  const rawResult = results[0]?.result;
+  if (rawResult && rawResult.__error) {
+    throw new Error(rawResult.message);
+  }
+  return { tabId, selector: payload.selector, clicked: true, element: rawResult };
+}
+
+// ─── Type Text ──────────────────────────────────────────────────────
+
+async function handleTypeText(payload) {
+  if (!payload.selector) {
+    throw new Error('Missing required field: selector');
+  }
+  if (payload.text === undefined || payload.text === null) {
+    throw new Error('Missing required field: text');
+  }
+  const tabId = await resolveTabId(payload);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (selector, text, clearBefore, pressEnter) => {
+      const element = document.querySelector(selector);
+      if (!element) {
+        return { __error: true, message: `No element found for selector: ${selector}` };
+      }
+      // Focus the element
+      element.focus();
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      // Clear existing content if requested (default: true)
+      if (clearBefore !== false) {
+        if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
+          element.value = '';
+        } else if (element.isContentEditable) {
+          element.textContent = '';
+        }
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+
+      // Set the value
+      if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
+        // Use native setter to bypass React/Vue controlled component guards
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype, 'value'
+        )?.set || Object.getOwnPropertyDescriptor(
+          window.HTMLTextAreaElement.prototype, 'value'
+        )?.set;
+        if (nativeInputValueSetter) {
+          nativeInputValueSetter.call(element, text);
+        } else {
+          element.value = text;
+        }
+      } else if (element.isContentEditable) {
+        element.textContent = text;
+      }
+
+      // Dispatch events so frameworks detect the change
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+
+      // Optionally press Enter
+      if (pressEnter) {
+        element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+        element.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+        element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+        // Also submit the form if inside one
+        const form = element.closest('form');
+        if (form) {
+          form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        }
+      }
+
+      return {
+        tagName: element.tagName,
+        value: element.value || element.textContent || '',
+      };
+    },
+    args: [payload.selector, payload.text, payload.clearBefore, payload.pressEnter],
+  });
+  const rawResult = results[0]?.result;
+  if (rawResult && rawResult.__error) {
+    throw new Error(rawResult.message);
+  }
+  return { tabId, selector: payload.selector, typed: true, element: rawResult };
+}
+
+// ─── Scroll Page ────────────────────────────────────────────────────
+
+async function handleScrollPage(payload) {
+  const tabId = await resolveTabId(payload);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (direction, selector, pixels) => {
+      const scrollAmount = pixels || 500;
+
+      // If selector is provided, scroll that element into view
+      if (selector) {
+        const element = document.querySelector(selector);
+        if (!element) {
+          return { __error: true, message: `No element found for selector: ${selector}` };
+        }
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const rect = element.getBoundingClientRect();
+        return {
+          scrolledTo: selector,
+          elementRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          scrollY: window.scrollY,
+          scrollX: window.scrollX,
+        };
+      }
+
+      // Otherwise scroll by direction
+      switch (direction) {
+        case 'down':
+          window.scrollBy({ top: scrollAmount, behavior: 'smooth' });
+          break;
+        case 'up':
+          window.scrollBy({ top: -scrollAmount, behavior: 'smooth' });
+          break;
+        case 'right':
+          window.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+          break;
+        case 'left':
+          window.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+          break;
+        case 'top':
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          break;
+        case 'bottom':
+          window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+          break;
+        default:
+          // Default to scrolling down
+          window.scrollBy({ top: scrollAmount, behavior: 'smooth' });
+          break;
+      }
+
+      return {
+        direction: direction || 'down',
+        pixels: scrollAmount,
+        scrollY: window.scrollY,
+        scrollX: window.scrollX,
+        pageHeight: document.body.scrollHeight,
+        viewportHeight: window.innerHeight,
+      };
+    },
+    args: [payload.direction, payload.selector, payload.pixels],
+  });
+  const rawResult = results[0]?.result;
+  if (rawResult && rawResult.__error) {
+    throw new Error(rawResult.message);
+  }
+  return { tabId, scrolled: true, ...rawResult };
+}
+
+// ─── Hover Element ──────────────────────────────────────────────────
+
+async function handleHoverElement(payload) {
+  if (!payload.selector) {
+    throw new Error('Missing required field: selector');
+  }
+  const tabId = await resolveTabId(payload);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) {
+        return { __error: true, message: `No element found for selector: ${selector}` };
+      }
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const rect = element.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const eventOptions = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: centerX,
+        clientY: centerY,
+      };
+      element.dispatchEvent(new MouseEvent('mouseenter', { ...eventOptions, bubbles: false }));
+      element.dispatchEvent(new MouseEvent('mouseover', eventOptions));
+      element.dispatchEvent(new MouseEvent('mousemove', eventOptions));
+      return {
+        tagName: element.tagName,
+        textContent: (element.textContent || '').substring(0, 200),
+        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      };
+    },
+    args: [payload.selector],
+  });
+  const rawResult = results[0]?.result;
+  if (rawResult && rawResult.__error) {
+    throw new Error(rawResult.message);
+  }
+  return { tabId, selector: payload.selector, hovered: true, element: rawResult };
+}
+
+// ─── Mouse Click at Coordinates ─────────────────────────────────────
+
+async function handleMouseClickAt(payload) {
+  if (payload.x === undefined || payload.y === undefined) {
+    throw new Error('Missing required fields: x and y');
+  }
+  const tabId = await resolveTabId(payload);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (x, y, button, doubleClick) => {
+      const buttonMap = { left: 0, middle: 1, right: 2 };
+      const buttonCode = buttonMap[button] || 0;
+      const eventOptions = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: x,
+        clientY: y,
+        button: buttonCode,
+      };
+
+      // Find the element at the coordinates
+      const targetElement = document.elementFromPoint(x, y);
+      if (!targetElement) {
+        return { __error: true, message: `No element found at coordinates (${x}, ${y})` };
+      }
+
+      // Dispatch mouse events
+      targetElement.dispatchEvent(new MouseEvent('mouseover', eventOptions));
+      targetElement.dispatchEvent(new MouseEvent('mousedown', eventOptions));
+      targetElement.dispatchEvent(new MouseEvent('mouseup', eventOptions));
+      targetElement.dispatchEvent(new MouseEvent('click', eventOptions));
+
+      if (doubleClick) {
+        targetElement.dispatchEvent(new MouseEvent('mousedown', eventOptions));
+        targetElement.dispatchEvent(new MouseEvent('mouseup', eventOptions));
+        targetElement.dispatchEvent(new MouseEvent('click', eventOptions));
+        targetElement.dispatchEvent(new MouseEvent('dblclick', eventOptions));
+      }
+
+      return {
+        tagName: targetElement.tagName,
+        textContent: (targetElement.textContent || '').substring(0, 200),
+        id: targetElement.id || null,
+        className: targetElement.className || null,
+        coordinates: { x, y },
+      };
+    },
+    args: [payload.x, payload.y, payload.button, payload.doubleClick],
+  });
+  const rawResult = results[0]?.result;
+  if (rawResult && rawResult.__error) {
+    throw new Error(rawResult.message);
+  }
+  return { tabId, clickedAt: { x: payload.x, y: payload.y }, clicked: true, element: rawResult };
 }
 
 // ─── Start Connection ───────────────────────────────────────────────

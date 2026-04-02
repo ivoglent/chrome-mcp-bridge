@@ -9,6 +9,11 @@ import { executeJsTool } from './tools/executeJs.js';
 import { openTabTool } from './tools/openTab.js';
 import { listTabsTool } from './tools/listTabs.js';
 import { closeTabTool } from './tools/closeTab.js';
+import { clickElementTool } from './tools/clickElement.js';
+import { typeTextTool } from './tools/typeText.js';
+import { scrollPageTool } from './tools/scrollPage.js';
+import { hoverElementTool } from './tools/hoverElement.js';
+import { mouseClickAtTool } from './tools/mouseClickAt.js';
 
 /**
  * Create and start the MCP server.
@@ -28,6 +33,11 @@ export async function startMcpServer(wsServer) {
     openTabTool(wsServer),
     listTabsTool(wsServer),
     closeTabTool(wsServer),
+    clickElementTool(wsServer),
+    typeTextTool(wsServer),
+    scrollPageTool(wsServer),
+    hoverElementTool(wsServer),
+    mouseClickAtTool(wsServer),
   ];
 
   for (const tool of tools) {

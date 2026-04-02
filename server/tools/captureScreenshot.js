@@ -7,7 +7,10 @@
 export function captureScreenshotTool(wsServer) {
   return {
     name: 'capture_screenshot',
-    description: 'Capture a screenshot of a browser tab. Returns base64-encoded PNG image. Can target by tabId, by title search, or default to the active tab.',
+    description:
+      'Capture a screenshot of a browser tab. Returns base64-encoded image. ' +
+      'Can target by tabId, by title search, or default to the active tab. ' +
+      'Use "format" and "quality" to control image size (jpeg with lower quality = smaller payload).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -19,13 +22,27 @@ export function captureScreenshotTool(wsServer) {
           type: 'string',
           description: 'Search for a tab by title (case-insensitive partial match).',
         },
+        format: {
+          type: 'string',
+          enum: ['png', 'jpeg'],
+          description: 'Image format. Use "jpeg" for smaller file size (default: "jpeg").',
+        },
+        quality: {
+          type: 'number',
+          description: 'JPEG quality 0-100. Lower = smaller size. Only applies when format is "jpeg" (default: 50).',
+        },
       },
     },
     async handler(params) {
+      const format = params.format || 'jpeg';
+      const quality = params.quality ?? 50;
+
       console.error(`[capture_screenshot] Sending command with params:`, JSON.stringify(params));
       const result = await wsServer.sendCommand('capture_screenshot', {
         tabId: params.tabId,
         title: params.title,
+        format,
+        quality,
       });
       console.error(`[capture_screenshot] Got result, base64 length: ${result?.base64?.length}, tabId: ${result?.tabId}`);
 
@@ -34,14 +51,19 @@ export function captureScreenshotTool(wsServer) {
         throw new Error('No screenshot data received from extension');
       }
 
-      // Return as both image content (for MCP clients that support it)
-      // and text content with data URL (as fallback)
-      const dataUrl = `data:image/png;base64,${base64Data}`;
+      const mimeType = format === 'png' ? 'image/png' : 'image/jpeg';
+      const sizeKB = Math.round((base64Data.length * 3) / 4 / 1024);
+
       return {
         content: [
           {
             type: 'text',
-            text: `Screenshot captured from tab ${result.tabId} (format: ${result.format}, ${base64Data.length} chars base64).\n\n![screenshot](${dataUrl})`,
+            text: `Screenshot captured from tab ${result.tabId} (${format}, ~${sizeKB} KB).`,
+          },
+          {
+            type: 'image',
+            data: base64Data,
+            mimeType,
           },
         ],
       };
