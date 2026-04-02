@@ -1,0 +1,20 @@
+{
+  "name": "chrome-extension-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP Server + WebSocket bridge for Chrome Extension control",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "chrome-mcp-server": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "cli": "node cli.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "express": "^4.21.2",
+    "uuid": "^11.1.0",
+    "ws": "^8.18.1"
+  }
+}

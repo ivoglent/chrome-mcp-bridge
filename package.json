@@ -1,0 +1,13 @@
+{
+  "name": "chrome-extension-mcp",
+  "version": "1.0.0",
+  "description": "AI Agent controls Chrome browser via MCP protocol + Chrome Extension + WebSocket bridge",
+  "private": true,
+  "scripts": {
+    "install:server": "cd server && npm install",
+    "start": "cd server && node index.js",
+    "cli": "cd server && node cli.js",
+    "cli:list": "cd server && node cli.js list_tabs",
+    "cli:screenshot": "cd server && node cli.js capture_screenshot"
+  }
+}
