@@ -232,10 +232,12 @@ async function handleExecuteJs(payload) {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: 'MAIN',
-    func: (scriptText) => {
+    func: async (scriptText) => {
       try {
+        // Wrap in an async IIFE so `await` and `return` both work.
         // eslint-disable-next-line no-eval
-        return eval(scriptText);
+        const asyncWrapper = `(async () => { ${scriptText} })()`;
+        return await eval(asyncWrapper);
       } catch (evalError) {
         return { __error: true, message: evalError.message };
       }

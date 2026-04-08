@@ -4,3 +4,4 @@ server/node_modules
 server/dist
 server/package-lock.json
 .aone_copilot
+docs
