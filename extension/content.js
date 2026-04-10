@@ -1,10 +1,12 @@
 // content.js — Content script injected into web pages
-// Currently used as a placeholder. The main logic runs in background.js
-// via chrome.scripting.executeScript for on-demand script injection.
+// Signals to the background service worker that this page is ready for
+// bridge script injection. The actual injection is handled by background.js
+// via chrome.scripting.executeScript to insert a <script> tag pointing to
+// the remotely-hosted mcp-bridge.js.
 
 (() => {
-  // Signal that the content script is loaded
   if (!window.__mcpExtensionLoaded) {
     window.__mcpExtensionLoaded = true;
+    console.log('[MCP Extension] Content script loaded.');
   }
 })();

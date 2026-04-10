@@ -1,21 +1,40 @@
 #!/usr/bin/env node
 // index.js — Entry point: starts WebSocket server + MCP server
+// Also serves the inject/mcp-bridge.js file for remote injection.
 import http from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createWsServer } from './wsServer.js';
 import { startMcpServer } from './mcpServer.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const WS_PORT = parseInt(process.env.WS_PORT || '7890', 10);
 
-// ─── Express app for health check ───────────────────────────────────
+// ─── Express app ────────────────────────────────────────────────────
 const app = express();
 
+// Serve the bridge script so the extension can inject it via <script src="...">
+// In production, host this on a proper HTTPS CDN instead.
+const injectDir = path.resolve(__dirname, '..', 'inject');
+app.use('/mcp-bridge.js', (_req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Content-Type', 'application/javascript');
+  res.sendFile(path.join(injectDir, 'mcp-bridge.js'));
+});
+
+// Health check endpoint
 app.get('/health', (_req, res) => {
-  const wsClients = wsServer.getClients();
+  const allClients = wsServer.getClients();
+  const bridgeClients = wsServer.getBridgeClients();
+  const extensionClients = wsServer.getExtensionClients();
   res.json({
     status: 'ok',
-    connectedClients: wsClients.length,
-    clients: wsClients,
+    totalClients: allClients.length,
+    extensionClients,
+    bridgeClients,
   });
 });
 
@@ -34,6 +53,7 @@ httpServer.on('error', (error) => {
 
 httpServer.listen(WS_PORT, () => {
   console.error(`[Server] HTTP + WebSocket server listening on port ${WS_PORT}`);
+  console.error(`[Server] Bridge script available at http://localhost:${WS_PORT}/mcp-bridge.js`);
 });
 
 // ─── MCP Server (stdio) ────────────────────────────────────────────
