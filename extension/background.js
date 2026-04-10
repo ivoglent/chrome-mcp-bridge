@@ -8,7 +8,7 @@ const CLIENT_ID = self.crypto.randomUUID();
 
 // URL of the remotely-hosted bridge script. Override via storage or env.
 // When developing locally, you can serve inject/mcp-bridge.js yourself.
-const DEFAULT_BRIDGE_SCRIPT_URL = 'http://localhost:7890/mcp-bridge.js';
+const DEFAULT_BRIDGE_SCRIPT_URL = 'https://files.codecuatui.com/api/public/dl/XFB1CqJV';
 
 let ws = null;
 let reconnectDelay = 1000;
@@ -99,6 +99,7 @@ function sendResponse(requestId, success, data, error = null) {
 
 async function handleAction(action, payload) {
   switch (action) {
+    // ── Browser-level actions (Chrome APIs) ──
     case 'capture_screenshot':
       return await handleCaptureScreenshot(payload);
     case 'open_tab':
@@ -111,8 +112,27 @@ async function handleAction(action, payload) {
       return await handleFocusTab(payload);
     case 'inject_bridge':
       return await handleInjectBridge(payload);
+    // ── Page-level fallback actions (when bridge is not connected) ──
+    case 'get_html':
+      return await handleGetHtml(payload);
+    case 'get_text':
+      return await handleGetText(payload);
+    case 'get_element':
+      return await handleGetElement(payload);
+    case 'click_element':
+      return await handleClickElement(payload);
+    case 'type_text':
+      return await handleTypeText(payload);
+    case 'scroll_page':
+      return await handleScrollPage(payload);
+    case 'hover_element':
+      return await handleHoverElement(payload);
+    case 'mouse_click_at':
+      return await handleMouseClickAt(payload);
+    case 'execute_js':
+      return await handleExecuteJs(payload);
     default:
-      throw new Error(`Unknown extension action: ${action}. Page-level actions are handled by the bridge script.`);
+      throw new Error(`Unknown action: ${action}`);
   }
 }
 
@@ -257,6 +277,246 @@ async function handleFocusTab(payload) {
   const tab = await chrome.tabs.update(payload.tabId, { active: true });
   await chrome.windows.update(tab.windowId, { focused: true });
   return { tabId: payload.tabId, focused: true };
+}
+
+// ─── Page-level Fallback Handlers ────────────────────────────────────
+// These handlers use chrome.scripting.executeScript with proper function
+// injection (no eval) as a fallback when the bridge script is not connected.
+
+async function handleGetHtml(payload) {
+  const tabId = await resolveTabId(payload);
+  const selector = payload.selector;
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (sel) => {
+      if (sel) {
+        const element = document.querySelector(sel);
+        if (!element) return { html: '', found: false };
+        return { html: element.outerHTML, found: true };
+      }
+      return { html: document.documentElement.outerHTML, found: true };
+    },
+    args: [selector || null],
+  });
+  const scriptResult = results[0]?.result || { html: '', found: false };
+  if (selector && !scriptResult.found) {
+    throw new Error(`No element found matching selector: "${selector}"`);
+  }
+  return { tabId, selector: selector || null, html: scriptResult.html };
+}
+
+async function handleGetText(payload) {
+  const tabId = await resolveTabId(payload);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => document.body.innerText,
+  });
+  return { tabId, text: results[0]?.result || '' };
+}
+
+async function handleGetElement(payload) {
+  if (!payload.selector) {
+    throw new Error('Missing required field: selector');
+  }
+  const tabId = await resolveTabId(payload);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return null;
+      return { outerHTML: element.outerHTML, textContent: element.textContent || '', tagName: element.tagName };
+    },
+    args: [payload.selector],
+  });
+  return { tabId, selector: payload.selector, element: results[0]?.result || null };
+}
+
+async function handleClickElement(payload) {
+  if (!payload.selector) {
+    throw new Error('Missing required field: selector');
+  }
+  const tabId = await resolveTabId(payload);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return { __error: true, message: `No element found for selector: ${selector}` };
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const rect = element.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const opts = { bubbles: true, cancelable: true, view: window, clientX: centerX, clientY: centerY };
+      element.dispatchEvent(new MouseEvent('mouseover', opts));
+      element.dispatchEvent(new MouseEvent('mousedown', opts));
+      element.dispatchEvent(new MouseEvent('mouseup', opts));
+      element.dispatchEvent(new MouseEvent('click', opts));
+      return { tagName: element.tagName, textContent: (element.textContent || '').substring(0, 200), rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+    },
+    args: [payload.selector],
+  });
+  const rawResult = results[0]?.result;
+  if (rawResult && rawResult.__error) throw new Error(rawResult.message);
+  return { tabId, selector: payload.selector, clicked: true, element: rawResult };
+}
+
+async function handleTypeText(payload) {
+  if (!payload.selector) throw new Error('Missing required field: selector');
+  if (payload.text === undefined || payload.text === null) throw new Error('Missing required field: text');
+  const tabId = await resolveTabId(payload);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (selector, text, clearBefore, pressEnter) => {
+      const element = document.querySelector(selector);
+      if (!element) return { __error: true, message: `No element found for selector: ${selector}` };
+      element.focus();
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (clearBefore !== false) {
+        if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') element.value = '';
+        else if (element.isContentEditable) element.textContent = '';
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+          || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+        if (setter) setter.call(element, text);
+        else element.value = text;
+      } else if (element.isContentEditable) {
+        element.textContent = text;
+      }
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      if (pressEnter) {
+        const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true };
+        element.dispatchEvent(new KeyboardEvent('keydown', enterOpts));
+        element.dispatchEvent(new KeyboardEvent('keypress', enterOpts));
+        element.dispatchEvent(new KeyboardEvent('keyup', enterOpts));
+        const form = element.closest('form');
+        if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      }
+      return { tagName: element.tagName, value: element.value || element.textContent || '' };
+    },
+    args: [payload.selector, payload.text, payload.clearBefore ?? true, payload.pressEnter ?? false],
+  });
+  const rawResult = results[0]?.result;
+  if (rawResult && rawResult.__error) throw new Error(rawResult.message);
+  return { tabId, selector: payload.selector, typed: true, element: rawResult };
+}
+
+async function handleScrollPage(payload) {
+  const tabId = await resolveTabId(payload);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (direction, selector, pixels) => {
+      const scrollAmount = pixels || 500;
+      if (selector) {
+        const element = document.querySelector(selector);
+        if (!element) return { __error: true, message: `No element found for selector: ${selector}` };
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const rect = element.getBoundingClientRect();
+        return { scrolledTo: selector, elementRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, scrollY: window.scrollY, scrollX: window.scrollX };
+      }
+      switch (direction) {
+        case 'down': window.scrollBy({ top: scrollAmount, behavior: 'smooth' }); break;
+        case 'up': window.scrollBy({ top: -scrollAmount, behavior: 'smooth' }); break;
+        case 'right': window.scrollBy({ left: scrollAmount, behavior: 'smooth' }); break;
+        case 'left': window.scrollBy({ left: -scrollAmount, behavior: 'smooth' }); break;
+        case 'top': window.scrollTo({ top: 0, behavior: 'smooth' }); break;
+        case 'bottom': window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }); break;
+        default: window.scrollBy({ top: scrollAmount, behavior: 'smooth' }); break;
+      }
+      return { direction: direction || 'down', pixels: scrollAmount, scrollY: window.scrollY, scrollX: window.scrollX, pageHeight: document.body.scrollHeight, viewportHeight: window.innerHeight };
+    },
+    args: [payload.direction || 'down', payload.selector || null, payload.pixels || 500],
+  });
+  const rawResult = results[0]?.result;
+  if (rawResult && rawResult.__error) throw new Error(rawResult.message);
+  return { tabId, scrolled: true, ...rawResult };
+}
+
+async function handleHoverElement(payload) {
+  if (!payload.selector) throw new Error('Missing required field: selector');
+  const tabId = await resolveTabId(payload);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return { __error: true, message: `No element found for selector: ${selector}` };
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const rect = element.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const opts = { bubbles: true, cancelable: true, view: window, clientX: centerX, clientY: centerY };
+      element.dispatchEvent(new MouseEvent('mouseenter', { ...opts, bubbles: false }));
+      element.dispatchEvent(new MouseEvent('mouseover', opts));
+      element.dispatchEvent(new MouseEvent('mousemove', opts));
+      return { tagName: element.tagName, textContent: (element.textContent || '').substring(0, 200), rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+    },
+    args: [payload.selector],
+  });
+  const rawResult = results[0]?.result;
+  if (rawResult && rawResult.__error) throw new Error(rawResult.message);
+  return { tabId, selector: payload.selector, hovered: true, element: rawResult };
+}
+
+async function handleMouseClickAt(payload) {
+  if (payload.x === undefined || payload.y === undefined) throw new Error('Missing required fields: x and y');
+  const tabId = await resolveTabId(payload);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (x, y, button, doubleClick) => {
+      const buttonMap = { left: 0, middle: 1, right: 2 };
+      const buttonCode = buttonMap[button] || 0;
+      const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: buttonCode };
+      const targetElement = document.elementFromPoint(x, y);
+      if (!targetElement) return { __error: true, message: `No element found at coordinates (${x}, ${y})` };
+      targetElement.dispatchEvent(new MouseEvent('mouseover', opts));
+      targetElement.dispatchEvent(new MouseEvent('mousedown', opts));
+      targetElement.dispatchEvent(new MouseEvent('mouseup', opts));
+      targetElement.dispatchEvent(new MouseEvent('click', opts));
+      if (doubleClick) {
+        targetElement.dispatchEvent(new MouseEvent('mousedown', opts));
+        targetElement.dispatchEvent(new MouseEvent('mouseup', opts));
+        targetElement.dispatchEvent(new MouseEvent('click', opts));
+        targetElement.dispatchEvent(new MouseEvent('dblclick', opts));
+      }
+      return { tagName: targetElement.tagName, textContent: (targetElement.textContent || '').substring(0, 200), id: targetElement.id || null, className: targetElement.className || null, coordinates: { x, y } };
+    },
+    args: [payload.x, payload.y, payload.button || 'left', payload.doubleClick || false],
+  });
+  const rawResult = results[0]?.result;
+  if (rawResult && rawResult.__error) throw new Error(rawResult.message);
+  return { tabId, clickedAt: { x: payload.x, y: payload.y }, clicked: true, element: rawResult };
+}
+
+async function handleExecuteJs(payload) {
+  if (!payload.script) throw new Error('Missing required field: script');
+  const tabId = await resolveTabId(payload);
+  // Use Function constructor instead of eval — more permissive under some CSP configs
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (scriptText) => {
+      try {
+        const fn = new Function(scriptText);
+        const result = fn();
+        if (result && typeof result.then === 'function') {
+          return result.then((resolved) => ({ result: resolved }));
+        }
+        return { result: result !== undefined ? result : null };
+      } catch (execError) {
+        return { __error: true, message: execError.message };
+      }
+    },
+    args: [payload.script],
+  });
+  const rawResult = results[0]?.result;
+  if (rawResult && rawResult.__error) throw new Error(rawResult.message);
+  return { tabId, result: rawResult?.result ?? null };
 }
 
 // ─── Auto-inject bridge on tab navigation ───────────────────────────
