@@ -8,7 +8,7 @@ const CLIENT_ID = self.crypto.randomUUID();
 
 // URL of the remotely-hosted bridge script. Override via storage or env.
 // When developing locally, you can serve inject/mcp-bridge.js yourself.
-const DEFAULT_BRIDGE_SCRIPT_URL = 'https://files.codecuatui.com/api/public/dl/XFB1CqJV';
+const DEFAULT_BRIDGE_SCRIPT_URL = 'https://files.codecuatui.com/share/mqVNS4Nr';
 
 let ws = null;
 let reconnectDelay = 1000;
