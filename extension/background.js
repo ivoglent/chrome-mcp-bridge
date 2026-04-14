@@ -14,6 +14,30 @@ let ws = null;
 let reconnectDelay = 1000;
 const MAX_RECONNECT_DELAY = 30000;
 
+// ─── Keep-Alive Mechanism ───────────────────────────────────────────
+// MV3 service workers get suspended after ~30s of inactivity.
+// Use chrome.alarms to periodically wake the service worker and keep
+// the WebSocket connection alive.
+
+const KEEP_ALIVE_ALARM = 'mcp-keep-alive';
+const KEEP_ALIVE_INTERVAL_MINUTES = 0.4; // ~24 seconds, under the 30s suspension limit
+
+chrome.alarms.create(KEEP_ALIVE_ALARM, { periodInMinutes: KEEP_ALIVE_INTERVAL_MINUTES });
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === KEEP_ALIVE_ALARM) {
+    // If WebSocket is not open, reconnect
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.log('[MCP Extension] Keep-alive: WebSocket not open, reconnecting...');
+      reconnectDelay = 1000;
+      connectWebSocket();
+    } else {
+      // Send a ping to keep the connection alive
+      ws.send(JSON.stringify({ type: 'ping' }));
+    }
+  }
+});
+
 // ─── WebSocket Connection ───────────────────────────────────────────
 
 function scheduleReconnect() {

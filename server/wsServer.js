@@ -54,6 +54,12 @@ export function createWsServer(httpServer) {
         return;
       }
 
+      // Handle ping/keep-alive messages
+      if (message.type === 'ping') {
+        socket.send(JSON.stringify({ type: 'pong' }));
+        return;
+      }
+
       // Handle identification message from extension or bridge
       if (message.type === 'identify' && message.clientId) {
         clientId = message.clientId;
