@@ -1,4 +1,5 @@
 // tools/typeText.js — MCP tool: type text into an input element
+import { resolveEffectiveTabId } from '../tabState.js';
 
 export function typeTextTool(wsServer) {
   return {
@@ -35,7 +36,7 @@ export function typeTextTool(wsServer) {
     },
     async handler(params) {
       const result = await wsServer.sendCommand('type_text', {
-        tabId: params.tabId,
+        tabId: resolveEffectiveTabId(params.tabId),
         selector: params.selector,
         text: params.text,
         clearBefore: params.clearBefore,

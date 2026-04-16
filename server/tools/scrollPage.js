@@ -1,4 +1,5 @@
 // tools/scrollPage.js — MCP tool: scroll the page or scroll to an element
+import { resolveEffectiveTabId } from '../tabState.js';
 
 export function scrollPageTool(wsServer) {
   return {
@@ -30,7 +31,7 @@ export function scrollPageTool(wsServer) {
     },
     async handler(params) {
       const result = await wsServer.sendCommand('scroll_page', {
-        tabId: params.tabId,
+        tabId: resolveEffectiveTabId(params.tabId),
         direction: params.direction,
         selector: params.selector,
         pixels: params.pixels,

@@ -1,4 +1,5 @@
 // tools/getHtml.js — MCP tool: get HTML source of a page or element
+import { resolveEffectiveTabId } from '../tabState.js';
 
 const DEFAULT_MAX_LENGTH = 100000;
 
@@ -32,7 +33,7 @@ export function getHtmlTool(wsServer) {
     },
     async handler(params) {
       const result = await wsServer.sendCommand('get_html', {
-        tabId: params.tabId,
+        tabId: resolveEffectiveTabId(params.tabId),
         selector: params.selector,
       });
 

@@ -1,4 +1,5 @@
 // tools/mouseClickAt.js — MCP tool: click at specific x,y coordinates
+import { resolveEffectiveTabId } from '../tabState.js';
 
 export function mouseClickAtTool(wsServer) {
   return {
@@ -36,7 +37,7 @@ export function mouseClickAtTool(wsServer) {
     },
     async handler(params) {
       const result = await wsServer.sendCommand('mouse_click_at', {
-        tabId: params.tabId,
+        tabId: resolveEffectiveTabId(params.tabId),
         x: params.x,
         y: params.y,
         button: params.button,

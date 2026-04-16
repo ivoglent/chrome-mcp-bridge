@@ -1,4 +1,5 @@
 // tools/executeJs.js — MCP tool: execute JavaScript in a browser tab
+import { resolveEffectiveTabId } from '../tabState.js';
 
 export function executeJsTool(wsServer) {
   return {
@@ -20,7 +21,7 @@ export function executeJsTool(wsServer) {
     },
     async handler(params) {
       const result = await wsServer.sendCommand('execute_js', {
-        tabId: params.tabId,
+        tabId: resolveEffectiveTabId(params.tabId),
         script: params.script,
       });
       return {

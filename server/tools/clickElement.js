@@ -1,4 +1,5 @@
 // tools/clickElement.js — MCP tool: click an element by CSS selector
+import { resolveEffectiveTabId } from '../tabState.js';
 
 export function clickElementTool(wsServer) {
   return {
@@ -24,7 +25,7 @@ export function clickElementTool(wsServer) {
     },
     async handler(params) {
       const result = await wsServer.sendCommand('click_element', {
-        tabId: params.tabId,
+        tabId: resolveEffectiveTabId(params.tabId),
         selector: params.selector,
       });
       return {

@@ -1,4 +1,5 @@
 // tools/hoverElement.js — MCP tool: hover over an element
+import { resolveEffectiveTabId } from '../tabState.js';
 
 export function hoverElementTool(wsServer) {
   return {
@@ -22,7 +23,7 @@ export function hoverElementTool(wsServer) {
     },
     async handler(params) {
       const result = await wsServer.sendCommand('hover_element', {
-        tabId: params.tabId,
+        tabId: resolveEffectiveTabId(params.tabId),
         selector: params.selector,
       });
       return {

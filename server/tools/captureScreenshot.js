@@ -1,4 +1,5 @@
 // tools/captureScreenshot.js — MCP tool: capture browser tab screenshot
+import { resolveEffectiveTabId } from '../tabState.js';
 
 /**
  * @param {object} wsServer - The WebSocket server instance with sendCommand
@@ -39,7 +40,7 @@ export function captureScreenshotTool(wsServer) {
 
       console.error(`[capture_screenshot] Sending command with params:`, JSON.stringify(params));
       const result = await wsServer.sendCommand('capture_screenshot', {
-        tabId: params.tabId,
+        tabId: resolveEffectiveTabId(params.tabId),
         title: params.title,
         format,
         quality,
